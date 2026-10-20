@@ -174,14 +174,14 @@ def bbox_iou(
         # WIoU v3: Wise IoU with dynamic focusing coefficient.
         # Down-weights gradient from geometrically outlier boxes (noisy/ambiguous labels).
         # Reference: https://arxiv.org/abs/2301.10051
-        # Compute centre distance squared and convex diagonal squared (reuse if already computed)
+        # Compute center distance squared and convex diagonal squared (reuse if already computed)
         if not (CIoU or DIoU or GIoU):
             cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1)
             ch = b1_y2.maximum(b2_y2) - b1_y1.minimum(b2_y1)
         c2 = cw.pow(2) + ch.pow(2) + eps
         rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2).pow(2) + (b2_y1 + b2_y2 - b1_y1 - b1_y2).pow(2)) / 4
-        # Wise IoU base: IoU loss weighted by normalised centre distance
-        wise_factor = torch.exp(rho2 / c2)  # > 1 for distant centres (outliers)
+        # Wise IoU base: IoU loss weighted by normalized center distance
+        wise_factor = torch.exp(rho2 / c2)  # > 1 for distant centers (outliers)
         # Dynamic focusing: r = iou / iou.mean() across batch; down-weight when r < 1 (outlier)
         iou_detached = iou.detach()
         beta = 2.0  # focusing exponent
@@ -440,7 +440,7 @@ class ConfusionMatrix(DataExportMixin):
         """
         gt_cls, gt_bboxes = batch["cls"], batch["bboxes"]
         if self.matches is not None:  # only if visualization is enabled
-            self.matches = {k: defaultdict(list) for k in {"TP", "FP", "FN", "GT"}}
+            self.matches = {k: defaultdict(list) for k in ("TP", "FP", "FN", "GT")}
             for i in range(gt_cls.shape[0]):
                 self._append_matches("GT", batch, i)  # store GT
         is_obb = gt_bboxes.shape[1] == 5  # check if boxes contains angle for OBB
@@ -622,7 +622,7 @@ class ConfusionMatrix(DataExportMixin):
         if ticklabels != "auto":
             ax.set_xticklabels(ticklabels, fontsize=tick_fontsize, rotation=90, ha="center")
             ax.set_yticklabels(ticklabels, fontsize=tick_fontsize)
-        for s in {"left", "right", "bottom", "top", "outline"}:
+        for s in ("left", "right", "bottom", "top", "outline"):
             if s != "outline":
                 ax.spines[s].set_visible(False)  # Confusion matrix plot don't have outline
             cbar.ax.spines[s].set_visible(False)
@@ -1152,7 +1152,7 @@ class DetMetrics(SimpleClass, DataExportMixin):
         self.names = names if names is not None else {}
         self.box = Metric()
         self.speed = {"preprocess": 0.0, "inference": 0.0, "loss": 0.0, "postprocess": 0.0}
-        self.stats = dict(tp=[], conf=[], pred_cls=[], target_cls=[], target_img=[])
+        self.stats = {"tp": [], "conf": [], "pred_cls": [], "target_cls": [], "target_img": []}
         self.nt_per_class = None
         self.nt_per_image = None
 
@@ -1163,7 +1163,7 @@ class DetMetrics(SimpleClass, DataExportMixin):
             stat (dict[str, Any]): Dictionary containing new statistical values to append. Keys should match existing
                 keys in self.stats.
         """
-        for k in self.stats.keys():
+        for k in self.stats:
             self.stats[k].append(stat[k])
         self.box.update_image_metrics(stat["tp"], stat["target_cls"], stat["pred_cls"], stat["im_name"])
 
@@ -1810,7 +1810,7 @@ class SemanticMetrics(SimpleClass, DataExportMixin):
         fig, ax = plt.subplots(1, 1, figsize=(10, 6), tight_layout=True)
         names = list(self.names.values()) if self.names else [str(i) for i in range(self.nc)]
         x = np.arange(self.nc)
-        bars = ax.bar(x, self._per_class_iou, color=[list(c / 255.0 for c in colors(i, False)) for i in range(self.nc)])
+        bars = ax.bar(x, self._per_class_iou, color=[[c / 255.0 for c in colors(i, False)] for i in range(self.nc)])
         ax.set_xlabel("Class")
         ax.set_ylabel("IoU")
         ax.set_title("Per-Class IoU")
