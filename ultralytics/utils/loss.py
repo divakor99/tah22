@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Any
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch import nn
 
 from ultralytics.utils.metrics import CITYSCAPES_WEIGHT, OKS_SIGMA, RLE_WEIGHT
 from ultralytics.utils.ops import crop_mask, xywh2xyxy, xyxy2xywh
@@ -54,15 +54,14 @@ class VarifocalLoss(nn.Module):
 class QualityFocalLoss(nn.Module):
     """Quality Focal Loss (QFL) for bounding box detection.
 
-    Replaces hard 0/1 classification targets with soft IoU-quality targets.
-    The network learns to score detections proportional to their localization
-    quality, making confidence scores reliable proxies for box quality at
-    inference time.
+    Replaces hard 0/1 classification targets with soft IoU-quality targets. The network learns to score detections
+    proportional to their localization quality, making confidence scores reliable proxies for box quality at inference
+    time.
 
-    For wafer defect detection: rare defect classes benefit from soft targets
-    because ambiguous boundary regions are no longer penalised with hard 0/1.
+    For wafer defect detection: rare defect classes benefit from soft targets because ambiguous boundary regions are no
+    longer penalized with hard 0/1.
 
-    Reference:
+    References:
         Li et al., "Generalized Focal Loss", NeurIPS 2020.
         https://arxiv.org/abs/2006.04388
     """
@@ -87,10 +86,9 @@ class QualityFocalLoss(nn.Module):
 
         Args:
             pred_score (torch.Tensor): Predicted logits (B, A, nc).
-            gt_score (torch.Tensor): Soft quality targets in [0,1] (B, A, nc).
-                Positive anchors carry the IoU value; negatives carry 0.
-            label (torch.Tensor): Hard binary label (B, A, nc). Used to
-                identify positive anchors for scaling.
+            gt_score (torch.Tensor): Soft quality targets in [0,1] (B, A, nc). Positive anchors carry the IoU value;
+                negatives carry 0.
+            label (torch.Tensor): Hard binary label (B, A, nc). Used to identify positive anchors for scaling.
 
         Returns:
             (torch.Tensor): Scalar QFL loss value.
@@ -100,11 +98,9 @@ class QualityFocalLoss(nn.Module):
         scale_factor = (pred_sigmoid - gt_score).abs().pow(self.beta)
         with autocast(enabled=False):
             # Sum over classes (dim=1) then sum over anchors.
-            # Caller divides by target_scores_sum for proper normalisation.
+            # Caller divides by target_scores_sum for proper normalization.
             loss = (
-                F.binary_cross_entropy_with_logits(
-                    pred_score.float(), gt_score.float(), reduction="none"
-                )
+                F.binary_cross_entropy_with_logits(pred_score.float(), gt_score.float(), reduction="none")
                 * scale_factor
             ).sum()
         return loss
@@ -423,10 +419,10 @@ class v8DetectionLoss:
             self.class_weights = self.class_weights.to(device).view(1, 1, -1)
 
         self.assigner = TaskAlignedAssigner(
-            topk=tal_topk,      # 13: more positive anchors per defect vs default 10
+            topk=tal_topk,  # 13: more positive anchors per defect vs default 10
             num_classes=self.nc,
-            alpha=1.0,          # up from 0.5: equal weight on cls score in alignment
-            beta=6.0,           # keep: strong IoU weight in alignment score
+            alpha=1.0,  # up from 0.5: equal weight on cls score in alignment
+            beta=6.0,  # keep: strong IoU weight in alignment score
             stride=self.stride.tolist(),
             topk2=tal_topk2,
         )
@@ -496,7 +492,7 @@ class v8DetectionLoss:
         target_scores_sum = max(target_scores.sum(), 1)
 
         # QFL classification loss.
-        # target_scores from TOOD carries soft IoU-quality values for positives (0 for negatives).
+        # target_scores from TODO carries soft IoU-quality values for positives (0 for negatives).
         # label = (target_scores > 0) identifies positives for the |pred-target|^beta scaling factor.
         # QualityFocalLoss.forward already returns a fully reduced scalar via .mean(1).sum(),
         # so we only divide by target_scores_sum once here — do NOT divide inside the module too.
@@ -506,10 +502,16 @@ class v8DetectionLoss:
             pred_sig = pred_scores.sigmoid()
             scale = (pred_sig - target_scores.to(dtype)).abs().pow(self.bce.beta)
             qfl_loss_raw = (
-                F.binary_cross_entropy_with_logits(
-                    pred_scores.float(), target_scores.to(dtype).float(), reduction="none"
-                ) * scale * self.class_weights
-            ).mean(1).sum()
+                (
+                    F.binary_cross_entropy_with_logits(
+                        pred_scores.float(), target_scores.to(dtype).float(), reduction="none"
+                    )
+                    * scale
+                    * self.class_weights
+                )
+                .mean(1)
+                .sum()
+            )
             loss[1] = qfl_loss_raw / target_scores_sum
         else:
             loss[1] = self.bce(pred_scores, target_scores.to(dtype), label) / target_scores_sum  # QFL
