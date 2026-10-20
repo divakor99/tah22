@@ -7,7 +7,7 @@ import math
 
 import numpy as np
 import torch
-import torch.nn as nn
+from torch import nn
 
 __all__ = (
     "CBAM",
@@ -674,11 +674,10 @@ class Index(nn.Module):
 class SimAM(nn.Module):
     """SimAM: Simple, Parameter-Free Attention Module.
 
-    A parameter-free 3D attention module based on neuron energy minimization.
-    Neurons with high local variance (i.e. anomalous regions such as wafer defects)
-    receive high attention weights with zero learnable parameters.
+    A parameter-free 3D attention module based on neuron energy minimization. Neurons with high local variance (i.e.
+    anomalous regions such as wafer defects) receive high attention weights with zero learnable parameters.
 
-    Reference:
+    References:
         Yang et al., "SimAM: A Simple, Parameter-Free Attention Module for
         Convolutional Neural Networks", ICML 2021.
         https://proceedings.mlr.press/v139/yang21o.html
@@ -702,7 +701,7 @@ class SimAM(nn.Module):
         Returns:
             (torch.Tensor): Attended output tensor, same shape as input.
         """
-        b, c, h, w = x.shape
+        _b, _c, h, w = x.shape
         n = h * w - 1  # number of spatial elements minus 1
         # Per-channel mean subtracted squared deviation
         d = (x - x.mean(dim=[2, 3], keepdim=True)).pow(2)
@@ -716,14 +715,12 @@ class SimAM(nn.Module):
 class DCNv3(nn.Module):
     """Lightweight DCNv3-style deformable convolution for mid-level features.
 
-    A self-contained implementation that avoids the custom CUDA ops required by
-    the original InternImage DCNv3. Uses standard PyTorch grid_sample to achieve
-    deformable sampling with grouped offsets and modulation masks.  Suitable for
-    C3/C4 backbone feature levels where irregular defect shapes benefit from
-    adaptive receptive fields.
+    A self-contained implementation that avoids the custom CUDA ops required by the original InternImage DCNv3. Uses
+    standard PyTorch grid_sample to achieve deformable sampling with grouped offsets and modulation masks. Suitable for
+    C3/C4 backbone feature levels where irregular defect shapes benefit from adaptive receptive fields.
 
-    This module does NOT require compiling InternImage CUDA extensions and works
-    directly in the existing Ultralytics/Anaconda sam2 environment.
+    This module does NOT require compiling InternImage CUDA extensions and works directly in the existing
+    Ultralytics/Anaconda sam2 environment.
 
     Args:
         c1 (int): Input channels.
@@ -793,14 +790,14 @@ class DCNv3(nn.Module):
         Ho, Wo = om.shape[2], om.shape[3]
 
         om = om.view(B, self.g, k2, 3, Ho, Wo)
-        offsets = om[..., :2, :, :]   # (B, g, k2, 2, Ho, Wo)
+        offsets = om[..., :2, :, :]  # (B, g, k2, 2, Ho, Wo)
         masks = torch.sigmoid(om[..., 2, :, :])  # (B, g, k2, Ho, Wo)
 
         # 2. Project values
         v = self.value_proj(x).float()  # grid_sample requires float32 input regardless of AMP dtype
 
         # 3. Build absolute sampling coordinates for each kernel point
-        # Normalise base grid to [-1, 1] for grid_sample
+        # Normalize base grid to [-1, 1] for grid_sample
         # grid_sample coords: x in [-1,1] maps to [0,W-1]
         c_per_g = C // self.g
         out = torch.zeros(B, C, Ho, Wo, device=x.device, dtype=x.dtype)
@@ -811,19 +808,19 @@ class DCNv3(nn.Module):
         grid_y, grid_x = torch.meshgrid(gy, gx, indexing="ij")  # (Ho, Wo)
 
         for gi in range(self.g):
-            vi = v[:, gi * c_per_g:(gi + 1) * c_per_g]  # (B, c_per_g, H, W)
+            vi = v[:, gi * c_per_g : (gi + 1) * c_per_g]  # (B, c_per_g, H, W)
             gi_out = torch.zeros_like(vi)
 
             for ki in range(k2):
-                # Normalise base offset to [-1,1] scale
+                # Normalize base offset to [-1,1] scale
                 bx = self.base_grid[ki, 0] / (W / 2) * self.s
                 by = self.base_grid[ki, 1] / (H / 2) * self.s
 
-                # Learned offset (normalised)
+                # Learned offset (normalized)
                 dx = offsets[:, gi, ki, 0] / (W / 2)  # (B, Ho, Wo)
                 dy = offsets[:, gi, ki, 1] / (H / 2)
 
-                sx = grid_x.unsqueeze(0) + bx + dx   # (B, Ho, Wo)
+                sx = grid_x.unsqueeze(0) + bx + dx  # (B, Ho, Wo)
                 sy = grid_y.unsqueeze(0) + by + dy
 
                 sample_grid = torch.stack([sx, sy], dim=-1)  # (B, Ho, Wo, 2)
@@ -835,6 +832,6 @@ class DCNv3(nn.Module):
                 m = masks[:, gi, ki].unsqueeze(1)  # (B, 1, Ho, Wo)
                 gi_out = gi_out + sampled * m
 
-            out[:, gi * c_per_g:(gi + 1) * c_per_g] = gi_out
+            out[:, gi * c_per_g : (gi + 1) * c_per_g] = gi_out
 
         return self.act(self.bn(self.out_proj(out))).to(x.dtype)  # restore original dtype (e.g. float16 under AMP)
