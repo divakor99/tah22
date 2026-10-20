@@ -8,14 +8,11 @@ from copy import deepcopy
 from pathlib import Path
 
 import torch
-import torch.nn as nn
+from torch import nn
 
 from ultralytics.nn.autobackend import check_class_names
 from ultralytics.nn.modules import (
     AIFI,
-    BiFPN,
-    DCNv3Fast,
-    DySnakeRes,
     C1,
     C2,
     C2PSA,
@@ -31,6 +28,7 @@ from ultralytics.nn.modules import (
     A2C2f,
     AConv,
     ADown,
+    BiFPN,
     Bottleneck,
     BottleneckCSP,
     C2f,
@@ -47,9 +45,11 @@ from ultralytics.nn.modules import (
     Conv,
     Conv2,
     ConvTranspose,
+    DCNv3Fast,
     Detect,
     DWConv,
     DWConvTranspose2d,
+    DySnakeRes,
     Focus,
     GhostBottleneck,
     GhostConv,
@@ -194,12 +194,16 @@ class BaseModel(torch.nn.Module):
             if profile:
                 self._profile_one_layer(m, x, dt)
             x = m(x)  # run
-            y.append(x if (m.i in self.save or isinstance(x, list)) else None)  # save output; always save list outputs (e.g. BiFPN)
+            y.append(
+                x if (m.i in self.save or isinstance(x, list)) else None
+            )  # save output; always save list outputs (e.g. BiFPN)
             if visualize:
                 feature_visualization(x, m.type, m.i, save_dir=visualize)
             if m.i in embed:
                 if not isinstance(x, list):
-                    embeddings.append(torch.nn.functional.adaptive_avg_pool2d(x, (1, 1)).squeeze(-1).squeeze(-1))  # flatten
+                    embeddings.append(
+                        torch.nn.functional.adaptive_avg_pool2d(x, (1, 1)).squeeze(-1).squeeze(-1)
+                    )  # flatten
                 if m.i == max_idx:
                     return torch.unbind(torch.cat(embeddings, 1), dim=0)
         return x
