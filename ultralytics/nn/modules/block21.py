@@ -4,12 +4,12 @@
 from __future__ import annotations
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch import nn
 
 from ultralytics.utils.torch_utils import fuse_conv_and_bn
 
-from .conv import Conv, DCNv3, DWConv, GhostConv, LightConv, RepConv, SimAM, autopad
+from .conv import Conv, DWConv, GhostConv, LightConv, RepConv, SimAM, autopad
 from .transformer import TransformerBlock
 
 __all__ = (
@@ -29,6 +29,7 @@ __all__ = (
     "ADown",
     "Attention",
     "BNContrastiveHead",
+    "BiFPN",
     "Bottleneck",
     "BottleneckCSP",
     "C2f",
@@ -41,6 +42,7 @@ __all__ = (
     "CBFuse",
     "CBLinear",
     "ContrastiveHead",
+    "DCNv3Fast",
     "GhostBottleneck",
     "HGBlock",
     "HGStem",
@@ -50,8 +52,6 @@ __all__ = (
     "RepNCSPELAN4",
     "RepVGGDW",
     "ResNetLayer",
-    "BiFPN",
-    "DCNv3Fast",
     "SCDown",
     "TorchVision",
 )
@@ -2084,8 +2084,7 @@ class BiFPNNode(nn.Module):
         self.w = nn.Parameter(torch.ones(self.n, dtype=torch.float32), requires_grad=True)
         self.eps = 1e-4
         self.projs = nn.ModuleList(
-            Conv(c, out_channels, k=1) if c != out_channels else nn.Identity()
-            for c in in_channels
+            Conv(c, out_channels, k=1) if c != out_channels else nn.Identity() for c in in_channels
         )
         self.dw = DWConv(out_channels, out_channels, k=5, s=1)
         self.pw = Conv(out_channels, out_channels, k=1)
@@ -2101,15 +2100,15 @@ class BiFPNNode(nn.Module):
 class DCNv3Fast(nn.Module):
     """Vectorised DCNv3-style deformable convolution — no Python for-loops.
 
-    Replaces the original per-kernel-point for-loop with a single batched
-    grid_sample call, giving proper gradient flow through the offset prediction
+    Replaces the original per-kernel-point for-loop with a single batched grid_sample call, giving proper gradient flow
+    through the offset prediction
     branch. This is the key fix for the recall plateau seen in train-9.
 
     Compared to the original DCNv3:
-      - Offsets and masks are computed in one forward pass (no loop over k*k)
-      - A single grid_sample call samples all k*k positions simultaneously
-      - Gradient accumulation through offsets is correct and efficient
-      - ~3-5x faster forward pass, much cleaner backward graph
+    - Offsets and masks are computed in one forward pass (no loop over k*k)
+    - A single grid_sample call samples all k*k positions simultaneously
+    - Gradient accumulation through offsets is correct and efficient
+    - ~3-5x faster forward pass, much cleaner backward graph
 
     Args:
         c1 (int): Input channels.
@@ -2164,16 +2163,16 @@ class DCNv3Fast(nn.Module):
         x_f = x.float()  # grid_sample requires float32
 
         # ── 1. Predict offsets and modulation masks ─────────────────────────
-        om = self.offset_mask_conv(x_f)           # (B, g*k2*3, Ho, Wo)
+        om = self.offset_mask_conv(x_f)  # (B, g*k2*3, Ho, Wo)
         Ho, Wo = om.shape[2], om.shape[3]
         om = om.view(B, self.g, self.k2, 3, Ho, Wo)
-        offsets = om[..., :2, :, :]               # (B, g, k2, 2, Ho, Wo)
-        masks   = torch.sigmoid(om[..., 2, :, :]) # (B, g, k2, Ho, Wo)
+        offsets = om[..., :2, :, :]  # (B, g, k2, 2, Ho, Wo)
+        masks = torch.sigmoid(om[..., 2, :, :])  # (B, g, k2, Ho, Wo)
 
         # ── 2. Build sampling grid for all kernel points simultaneously ──────
         # Normalised base offsets: scale by stride / spatial dim
-        bx = self.base_grid[..., 0] / (W / 2) * self.s   # (1, k2)
-        by = self.base_grid[..., 1] / (H / 2) * self.s   # (1, k2)
+        bx = self.base_grid[..., 0] / (W / 2) * self.s  # (1, k2)
+        by = self.base_grid[..., 1] / (H / 2) * self.s  # (1, k2)
 
         # Output pixel grid in [-1, 1]
         gy = torch.linspace(-1, 1, Ho, device=x.device, dtype=torch.float32)
@@ -2189,26 +2188,29 @@ class DCNv3Fast(nn.Module):
         sy = grid_y[None, None, None] + by[None, :, :, None, None] + dy
 
         # ── 3. Value projection ──────────────────────────────────────────────
-        v = self.value_proj(x_f)          # (B, C, H, W)
+        v = self.value_proj(x_f)  # (B, C, H, W)
         c_per_g = C // self.g
 
         # Reshape sx/sy for batched grid_sample:
         # merge (g, k2, Ho, Wo) into batch dim → (B*g*k2, Ho, Wo, 2)
         # Then sample v reshaped as (B*g, c_per_g, H, W)
-        sx_flat = sx.view(B * self.g, self.k2, Ho, Wo)   # (B*g, k2, Ho, Wo)
+        sx_flat = sx.view(B * self.g, self.k2, Ho, Wo)  # (B*g, k2, Ho, Wo)
         sy_flat = sy.view(B * self.g, self.k2, Ho, Wo)
 
-        v_grouped = v.view(B * self.g, c_per_g, H, W)    # (B*g, c_per_g, H, W)
+        v_grouped = v.view(B * self.g, c_per_g, H, W)  # (B*g, c_per_g, H, W)
 
         # Stack all k2 positions as separate "frames" → (B*g*k2, c_per_g, H, W)
         # and sample once
         v_rep = v_grouped.unsqueeze(1).expand(-1, self.k2, -1, -1, -1)
         v_rep = v_rep.reshape(B * self.g * self.k2, c_per_g, H, W)
 
-        grid_xy = torch.stack([
-            sx_flat.reshape(B * self.g * self.k2, Ho, Wo),
-            sy_flat.reshape(B * self.g * self.k2, Ho, Wo),
-        ], dim=-1)  # (B*g*k2, Ho, Wo, 2)
+        grid_xy = torch.stack(
+            [
+                sx_flat.reshape(B * self.g * self.k2, Ho, Wo),
+                sy_flat.reshape(B * self.g * self.k2, Ho, Wo),
+            ],
+            dim=-1,
+        )  # (B*g*k2, Ho, Wo, 2)
 
         sampled = torch.nn.functional.grid_sample(
             v_rep, grid_xy, mode="bilinear", padding_mode="zeros", align_corners=True
@@ -2217,7 +2219,7 @@ class DCNv3Fast(nn.Module):
         # ── 4. Apply modulation masks and sum over k2 ────────────────────────
         # masks: (B, g, k2, Ho, Wo) → (B*g*k2, 1, Ho, Wo)
         m_flat = masks.reshape(B * self.g * self.k2, 1, Ho, Wo)
-        sampled = sampled * m_flat   # (B*g*k2, c_per_g, Ho, Wo)
+        sampled = sampled * m_flat  # (B*g*k2, c_per_g, Ho, Wo)
 
         # Sum over k2 kernel positions → (B*g, c_per_g, Ho, Wo)
         sampled = sampled.view(B * self.g, self.k2, c_per_g, Ho, Wo).sum(dim=1)
@@ -2232,10 +2234,10 @@ class BiFPN(nn.Module):
     """BiFPN neck — wider channels (384ch) + vectorised DCNv3Fast on P2/P3/P4.
 
     Changes vs train-9:
-      - out_channels 256 → 384 (fixes the BiFPN bottleneck that caused the
+    - out_channels 256 → 384 (fixes the BiFPN bottleneck that caused the
         recall plateau; at scale n: 256*0.25=64ch → 384*0.25=96ch effective)
-      - DCNv3 replaced by DCNv3Fast (vectorised, proper gradient flow)
-      - DCNv3Fast now also applied to P2 (stride-4) to improve QP recall
+    - DCNv3 replaced by DCNv3Fast (vectorised, proper gradient flow)
+    - DCNv3Fast now also applied to P2 (stride-4) to improve QP recall
         (QP is the smallest/rarest defect, lives mostly in P2)
 
     Args:
@@ -2250,10 +2252,7 @@ class BiFPN(nn.Module):
         self.num_iters = num_iters
         oc = out_channels
 
-        self.input_proj = nn.ModuleList(
-            Conv(c, oc, k=1) if c != oc else nn.Identity()
-            for c in in_channels
-        )
+        self.input_proj = nn.ModuleList(Conv(c, oc, k=1) if c != oc else nn.Identity() for c in in_channels)
 
         # DCNv3Fast on P2, P3, P4 — P5 is pure semantics, no deformable needed
         self.dcn_p2 = nn.ModuleList(DCNv3Fast(oc, oc) for _ in range(num_iters))
@@ -2263,16 +2262,24 @@ class BiFPN(nn.Module):
         self.td_nodes = nn.ModuleList()
         self.bu_nodes = nn.ModuleList()
         for _ in range(num_iters):
-            self.td_nodes.append(nn.ModuleList([
-                BiFPNNode([oc, oc], oc),       # P4_td: P4 + up(P5)
-                BiFPNNode([oc, oc], oc),       # P3_td: P3 + up(P4_td)
-                BiFPNNode([oc, oc], oc),       # P2_td: P2 + up(P3_td)
-            ]))
-            self.bu_nodes.append(nn.ModuleList([
-                BiFPNNode([oc, oc, oc], oc),   # P3_out
-                BiFPNNode([oc, oc, oc], oc),   # P4_out
-                BiFPNNode([oc, oc], oc),        # P5_out
-            ]))
+            self.td_nodes.append(
+                nn.ModuleList(
+                    [
+                        BiFPNNode([oc, oc], oc),  # P4_td: P4 + up(P5)
+                        BiFPNNode([oc, oc], oc),  # P3_td: P3 + up(P4_td)
+                        BiFPNNode([oc, oc], oc),  # P2_td: P2 + up(P3_td)
+                    ]
+                )
+            )
+            self.bu_nodes.append(
+                nn.ModuleList(
+                    [
+                        BiFPNNode([oc, oc, oc], oc),  # P3_out
+                        BiFPNNode([oc, oc, oc], oc),  # P4_out
+                        BiFPNNode([oc, oc], oc),  # P5_out
+                    ]
+                )
+            )
 
         self.upsample = nn.Upsample(scale_factor=2, mode="nearest")
         self.downsample_bu = nn.ModuleList([Conv(oc, oc, k=3, s=2) for _ in range(num_iters * 2)])
