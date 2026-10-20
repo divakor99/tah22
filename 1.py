@@ -1,9 +1,8 @@
-from ultralytics import YOLO
 import os
 
+from ultralytics import YOLO
 
-
-os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
+os.environ["KMP_DUPLICATE_LIB_OK"] = "True"
 
 # Load your custom YOLO26 architecture
 model = YOLO(r"F:\20000\ultralytics-main\ultralytics\cfg\models\26\yolo26-wafer.yaml")
